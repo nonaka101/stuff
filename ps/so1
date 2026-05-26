@@ -1,0 +1,86 @@
+<#
+.SYNOPSIS
+    Exchange Onlineのメールボックスおよび予定表の初期設定を行います。
+.DESCRIPTION
+    指定されたメールアドレスに対し、プロトコル制限、ロケール設定、
+    予定表のアクセス権設定、クォータ設定を行います。
+.EXAMPLE
+    .\Set-MailboxSettings.ps1 -TargetAddress "hoge@fuga.jp"
+#>
+
+param (
+    [Parameter(Mandatory=$true)]
+    [string]$TargetAddress
+)
+
+# ----------------------------------------------------------
+# 準備・接続
+# -----------------------------------------------------------
+Write-Host "Exchange Online に接続しています..." -ForegroundColor Cyan
+try {
+    Connect-ExchangeOnline -ErrorAction Stop
+}
+catch {
+    Write-Error "Exchange Online への接続に失敗しました。処理を中断します。"
+    exit
+}
+
+# ----------------------------------------------------------
+# 設定処理
+# -----------------------------------------------------------
+try {
+    Write-Host "[1/4] メールボックスのプロトコル (POP/IMAP/ActiveSync) を無効化しています..."
+    Set-CASMailbox -Identity $TargetAddress -PopEnabled $false -IMAPEnabled $false -ActiveSyncEnabled $false -ErrorAction Stop
+
+    Write-Host "[2/4] ロケールとタイムゾーンを設定しています..."
+    Set-MailboxRegionalConfiguration -Identity $TargetAddress -Language ja-JP -TimeZone "Tokyo Standard Time" -DateFormat "yyyy/MM/dd" -TimeFormat "HH:mm" -ErrorAction Stop
+
+    Write-Host "[3/4] メールボックスのクォータを設定しています..."
+    Set-Mailbox -Identity $TargetAddress -ProhibitSendReceiveQuota 50GB -ProhibitSendQuota 49.5GB -IssueWarningQuota 49GB -ErrorAction Stop
+
+    Write-Host "[4/4] 予定表のアクセス権を設定しています..."
+    # 予定表フォルダの言語が反映されていない（Calendarのまま）ケースを考慮したフェールオーバー
+    $scheduleJa = "${TargetAddress}:\予定表"
+    $scheduleEn = "${TargetAddress}:\Calendar"
+    
+    $folderAssigned = $false
+    
+    # まず「予定表」で試行
+    try {
+        Set-MailboxFolderPermission -Identity $scheduleJa -User Default -AccessRights Reviewer -ErrorAction Stop
+        $folderAssigned = $true
+        $targetSchedulePath = $scheduleJa
+    } catch {
+        # 失敗した場合は「Calendar」で試行
+        try {
+            Set-MailboxFolderPermission -Identity $scheduleEn -User Default -AccessRights Reviewer -ErrorAction Stop
+            $folderAssigned = $true
+            $targetSchedulePath = $scheduleEn
+        } catch {
+            Write-Warning "予定表フォルダへのアクセス権付与に失敗しました。（対象フォルダが見つからない、またはすでに設定済みの可能性があります）"
+        }
+    }
+    
+    Write-Host "全ての設定が完了しました。" -ForegroundColor Green
+}
+catch {
+    Write-Error "設定処理中にエラーが発生しました: $($_.Exception.Message)"
+}
+
+# ----------------------------------------------------------
+# 確認処理 (ログ出力形式)
+# -----------------------------------------------------------
+Write-Host "`n--- 設定結果の確認 ---" -ForegroundColor Cyan
+Get-CASMailbox -Identity $TargetAddress | Select-Object Identity, PopEnabled, IMAPEnabled, ActiveSyncEnabled | Format-Table -AutoSize
+Get-MailboxRegionalConfiguration -Identity $TargetAddress | Select-Object Language, TimeZone, DateFormat, TimeFormat | Format-Table -AutoSize
+Get-Mailbox -Identity $TargetAddress | Select-Object ProhibitSendReceiveQuota, ProhibitSendQuota, IssueWarningQuota | Format-Table -AutoSize
+
+if ($folderAssigned) {
+    Get-MailboxFolderPermission -Identity $targetSchedulePath | Format-Table -AutoSize
+}
+
+# ----------------------------------------------------------
+# 切断処理
+# -----------------------------------------------------------
+Write-Host "Exchange Online から切断しています..." -ForegroundColor Cyan
+Disconnect-ExchangeOnline -Confirm:$false

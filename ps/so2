@@ -1,0 +1,125 @@
+<#
+.SYNOPSIS
+    Exchange Onlineのメールボックスおよび予定表の初期設定を行います。
+.DESCRIPTION
+    実行時に設定対象のメールアドレスを入力として受け取り、簡易バリデーションを行った上で、
+    プロトコル制限、ロケール設定、クォータ設定、予定表アクセス権設定を実行し、結果を出力します。
+#>
+
+# ----------------------------------------------------------
+# 1. 入力の受け取りと簡易バリデーションチェック
+# ----------------------------------------------------------
+Write-Host "=== Microsoft 365 メールボックス初期設定スクリプト ===" -ForegroundColor Canvas
+$TargetAddress = Read-Host "設定対象のメールアドレスを入力してください"
+
+# [チェック①] 空文字・空白スペースのチェック
+if ([string]::IsNullOrWhiteSpace($TargetAddress)) {
+    Write-Error "エラー: メールアドレスが入力されていません。処理を中止します。"
+    exit
+}
+
+# [チェック②] 正規表現によるメールアドレス形式の簡易チェック
+# (文字 @ 文字 . 文字 の並びになっているか)
+$emailRegex = "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+if ($TargetAddress -notmatch $emailRegex) {
+    Write-Error "エラー: 入力された文字列は有効なメールアドレスの形式ではありません。処理を中止します。 (入力値: $TargetAddress)"
+    exit
+}
+
+Write-Host "メールアドレスの形式チェックを通過しました: $TargetAddress" -ForegroundColor Green
+
+
+# ----------------------------------------------------------
+# 2. 準備・接続処理
+# -----------------------------------------------------------
+Write-Host "`nExchange Online に接続しています..." -ForegroundColor Cyan
+try {
+    # モジュールのインポートと接続（エラー時は即座に停止）
+    Import-Module ExchangeOnlineManagement -ErrorAction SilentlyContinue
+    Connect-ExchangeOnline -ErrorAction Stop
+}
+catch {
+    Write-Error "Exchange Online への接続に失敗しました。認証情報や権限、インターネット接続を確認してください。"
+    exit
+}
+
+
+# ----------------------------------------------------------
+# 3. 設定の実行処理
+# -----------------------------------------------------------
+$folderAssigned = $false
+$targetSchedulePath = ""
+
+try {
+    Write-Host "`n--- 設定処理を開始します ---" -ForegroundColor Cyan
+
+    # ① プロトコルの無効化 (POP/IMAP/ActiveSync)
+    Write-Host "[1/4] プロトコル制限 (POP/IMAP/ActiveSync の無効化) を適用中..."
+    Set-CASMailbox -Identity $TargetAddress -PopEnabled $false -IMAPEnabled $false -ActiveSyncEnabled $false -ErrorAction Stop
+
+    # ② ロケール・タイムゾーンの設定
+    Write-Host "[2/4] 地域設定 (言語: 日本語 / タイムゾーン: 東京) を適用中..."
+    Set-MailboxRegionalConfiguration -Identity $TargetAddress -Language ja-JP -TimeZone "Tokyo Standard Time" -DateFormat "yyyy/MM/dd" -TimeFormat "HH:mm" -ErrorAction Stop
+
+    # ③ クォータ（容量制限）の設定
+    Write-Host "[3/4] メールボックス容量クォータ (50GB) を適用中..."
+    Set-Mailbox -Identity $TargetAddress -ProhibitSendReceiveQuota 50GB -ProhibitSendQuota 49.5GB -IssueWarningQuota 49GB -ErrorAction Stop
+
+    # ④ 予定表のアクセス権設定 (日本語環境/英語環境の両方を想定)
+    Write-Host "[4/4] 予定表の既定のアクセス権 (Default: Reviewer) を適用中..."
+    $scheduleJa = "${TargetAddress}:\予定表"
+    $scheduleEn = "${TargetAddress}:\Calendar"
+    
+    try {
+        # まず日本語環境用のフォルダ名で試行
+        Set-MailboxFolderPermission -Identity $scheduleJa -User Default -AccessRights Reviewer -ErrorAction Stop
+        $folderAssigned = $true
+        $targetSchedulePath = $scheduleJa
+    } catch {
+        try {
+            # 失敗した場合は英語環境用のフォルダ名で試行
+            Set-MailboxFolderPermission -Identity $scheduleEn -User Default -AccessRights Reviewer -ErrorAction Stop
+            $folderAssigned = $true
+            $targetSchedulePath = $scheduleEn
+        } catch {
+            Write-Warning "予定表フォルダへのアクセス権付与に失敗しました。（フォルダ名が異なる、または既に設定が存在する可能性があります）"
+        }
+    }
+    
+    Write-Host "`nすべての設定処理が正常に要求されました。" -ForegroundColor Green
+}
+catch {
+    Write-Error "設定処理中にエラーが発生しました: $($_.Exception.Message)"
+}
+
+
+# ----------------------------------------------------------
+# 4. 処理結果の出力（確認処理）
+# -----------------------------------------------------------
+Write-Host "`n==================================================" -ForegroundColor Cyan
+Write-Host "           現在の設定結果（最新情報）            " -ForegroundColor Cyan
+Write-Host "==================================================" -ForegroundColor Cyan
+
+Write-Host "`n[プロトコル有効化状態 (すべて False であること)]" -ForegroundColor Yellow
+Get-CASMailbox -Identity $TargetAddress | Select-Object Identity, PopEnabled, IMAPEnabled, ActiveSyncEnabled | Format-Table -AutoSize
+
+Write-Host "[地域設定 (ja-JP / Tokyo Standard Time)]" -ForegroundColor Yellow
+Get-MailboxRegionalConfiguration -Identity $TargetAddress | Select-Object Language, TimeZone, DateFormat, TimeFormat | Format-Table -AutoSize
+
+Write-Host "[クォータ設定 (50GB / 49.5GB / 49GB)]" -ForegroundColor Yellow
+Get-Mailbox -Identity $TargetAddress | Select-Object ProhibitSendReceiveQuota, ProhibitSendQuota, IssueWarningQuota | Format-Table -AutoSize
+
+Write-Host "[予定表のアクセス権状態]" -ForegroundColor Yellow
+if ($folderAssigned) {
+    Get-MailboxFolderPermission -Identity $targetSchedulePath | Format-Table -AutoSize
+} else {
+    Write-Host "予定表のアクセス権は設定されなかったため、表示をスキップします。" -ForegroundColor Red
+}
+
+
+# ----------------------------------------------------------
+# 5. 後処理（切断）
+# -----------------------------------------------------------
+Write-Host "`nExchange Online から安全に切断しています..." -ForegroundColor Cyan
+Disconnect-ExchangeOnline -Confirm:$false
+Write-Host "セッションが切断されました。スクリプトを終了します。" -ForegroundColor Green
