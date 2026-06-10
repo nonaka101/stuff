@@ -1,0 +1,52 @@
+/* =========================================
+   テーブル全体の設定
+========================================= */
+table {
+    border-collapse: collapse;
+    /* width: 100%; を削除し、中身の文字量に合わせて自然に広がるように変更 */
+    font-family: "Segoe UI", Meiryo, sans-serif;
+    font-size: 14px;
+    color: #333333;
+    background-color: #ffffff;
+}
+
+/* =========================================
+   セル（見出し・データ）の共通設定
+========================================= */
+th,
+td {
+    padding: 10px 14px;
+    border: 1px solid #d1d5db;
+    vertical-align: top;
+    min-width: 120px;
+    /* セルが極端に潰れるのを防ぐための最小幅 */
+    white-space: pre-wrap;
+    /* PowerShellが出力した元の改行(空白)を保持しつつ表示 */
+}
+
+/* =========================================
+   見出し（1行目）のスティッキー（固定）設定
+========================================= */
+th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background-color: #005a9e;
+    color: #ffffff;
+    font-weight: bold;
+    text-align: left;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    white-space: nowrap;
+    /* 列の見出しだけは絶対に折り返さないようにする */
+}
+
+/* =========================================
+   行の視認性を高める設定（ゼブラストライプ＆ホバー）
+========================================= */
+tr:nth-child(even) {
+    background-color: #f9fafb;
+}
+
+tr:hover {
+    background-color: #e5f1fb;
+}
